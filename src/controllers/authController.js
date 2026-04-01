@@ -1,8 +1,22 @@
 import User from "../models/User.js";
 import { createAuthToken, hashPassword, verifyPassword } from "../utils/auth.js";
 
-const validRoles = new Set(["customer", "staff", "admin"]);
-const validCustomerTypes = new Set(["personal", "business"]);
+const roleAliases = new Map([
+  ["customer", "customer"],
+  ["client", "customer"],
+  ["user", "customer"],
+  ["staff", "staff"],
+  ["employee", "staff"],
+  ["admin", "admin"],
+]);
+
+const customerTypeAliases = new Map([
+  ["personal", "personal"],
+  ["individual", "personal"],
+  ["business", "business"],
+  ["commercial", "business"],
+  ["corporate", "business"],
+]);
 
 const serializeUser = (user) => ({
   id: user._id,
@@ -14,18 +28,32 @@ const serializeUser = (user) => ({
   createdAt: user.createdAt,
 });
 
+const normalizeEnumValue = (value, aliases) => {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+
+  return aliases.get(String(value).toLowerCase().trim()) || null;
+};
+
 export const signup = async (req, res) => {
   try {
     const {
       name,
+      fullName,
       email,
       phone,
+      phoneNumber,
       password,
       role = "customer",
       customerType = "personal",
     } = req.body;
 
-    if (!name || !email || !phone || !password) {
+    const normalizedName = String(name || fullName || "").trim();
+    const normalizedEmail = String(email || "").toLowerCase().trim();
+    const normalizedPhone = String(phone || phoneNumber || "").trim();
+
+    if (!normalizedName || !normalizedEmail || !normalizedPhone || !password) {
       return res.status(400).json({ message: "Name, email, phone, and password are required." });
     }
 
@@ -33,27 +61,27 @@ export const signup = async (req, res) => {
       return res.status(400).json({ message: "Password must be at least 8 characters long." });
     }
 
-    const normalizedRole = String(role).toLowerCase();
-    const normalizedCustomerType = String(customerType).toLowerCase();
+    const normalizedRole = normalizeEnumValue(role, roleAliases);
+    const normalizedCustomerType = normalizeEnumValue(customerType, customerTypeAliases);
 
-    if (!validRoles.has(normalizedRole)) {
+    if (!normalizedRole) {
       return res.status(400).json({ message: "Invalid account role." });
     }
 
-    if (!validCustomerTypes.has(normalizedCustomerType)) {
+    if (!normalizedCustomerType) {
       return res.status(400).json({ message: "Invalid customer type." });
     }
 
-    const existingUser = await User.findOne({ email: String(email).toLowerCase().trim() });
+    const existingUser = await User.findOne({ email: normalizedEmail });
 
     if (existingUser) {
       return res.status(409).json({ message: "An account with this email already exists." });
     }
 
     const user = await User.create({
-      name: String(name).trim(),
-      email: String(email).toLowerCase().trim(),
-      phone: String(phone).trim(),
+      name: normalizedName,
+      email: normalizedEmail,
+      phone: normalizedPhone,
       passwordHash: hashPassword(password),
       role: normalizedRole,
       customerType: normalizedCustomerType,
@@ -67,6 +95,10 @@ export const signup = async (req, res) => {
       user: serializeUser(user),
     });
   } catch (error) {
+    if (error.code === 11000) {
+      return res.status(409).json({ message: "An account with this email already exists." });
+    }
+
     return res.status(500).json({ message: error.message || "Unable to create account." });
   }
 };
@@ -74,18 +106,25 @@ export const signup = async (req, res) => {
 export const login = async (req, res) => {
   try {
     const { email, password, role } = req.body;
+    const normalizedEmail = String(email || "").toLowerCase().trim();
 
-    if (!email || !password) {
+    if (!normalizedEmail || !password) {
       return res.status(400).json({ message: "Email and password are required." });
     }
 
-    const user = await User.findOne({ email: String(email).toLowerCase().trim() });
+    const user = await User.findOne({ email: normalizedEmail });
 
     if (!user || !verifyPassword(password, user.passwordHash)) {
       return res.status(401).json({ message: "Invalid email or password." });
     }
 
-    if (role && user.role !== String(role).toLowerCase()) {
+    const requestedRole = normalizeEnumValue(role, roleAliases);
+
+    if (role && !requestedRole) {
+      return res.status(400).json({ message: "Invalid account role." });
+    }
+
+    if (requestedRole && user.role !== requestedRole) {
       return res.status(403).json({ message: `This account is not registered as a ${role}.` });
     }
 
