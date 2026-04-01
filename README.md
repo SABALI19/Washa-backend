@@ -14,8 +14,10 @@ Required:
 Recommended for production:
 
 - `AUTH_SECRET`
+- `CORS_ORIGIN`
 
 The server now fails fast at startup if `MONGODB_URI` is missing, and it requires `AUTH_SECRET` when `NODE_ENV=production`.
+`CORS_ORIGIN` can be a comma-separated list of allowed frontend origins.
 
 ## Local Run
 
@@ -63,6 +65,7 @@ Upload these environment variables in `pxxl env`:
 - `MONGODB_URI`
 - `PORT=9000`
 - `AUTH_SECRET`
+- `CORS_ORIGIN=https://washa.pxxl.click`
 - `NODE_ENV=production`
 
 ## After Deployment

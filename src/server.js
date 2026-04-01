@@ -8,6 +8,36 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 9000;
+const DEFAULT_ALLOWED_ORIGINS = [
+  "http://localhost:5173",
+  "http://localhost:3000",
+  "https://washa.pxxl.click",
+  "https://washa.pxxl.pro",
+];
+
+const getAllowedOrigins = () => {
+  const configuredOrigins = String(process.env.CORS_ORIGIN || "")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
+  return configuredOrigins.length > 0 ? configuredOrigins : DEFAULT_ALLOWED_ORIGINS;
+};
+
+const corsOptions = {
+  origin(origin, callback) {
+    const allowedOrigins = getAllowedOrigins();
+
+    if (!origin || allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    return callback(new Error(`Origin ${origin} is not allowed by CORS.`));
+  },
+  methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  optionsSuccessStatus: 204,
+};
 
 const validateEnvironment = () => {
   const requiredVariables = ["MONGODB_URI"];
@@ -25,7 +55,8 @@ const validateEnvironment = () => {
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use(cors());
+app.use(cors(corsOptions));
+app.options(/.*/, cors(corsOptions));
 
 app.get("/", (req, res) => {
   res.send("Welcome to Washa Server");
