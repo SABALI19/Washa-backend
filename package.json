@@ -1,0 +1,27 @@
+{
+  "name": "washa-backend",
+  "version": "1.0.0",
+  "description": "luandry app",
+  "repository": {
+    "type": "git",
+    "url": "(https://github.com/SABALI19/Washa-backend.git)"
+  },
+  "license": "ISC",
+  "author": "samuel",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "mongoose": "^9.2.3"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.14"
+  }
+}
