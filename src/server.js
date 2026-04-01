@@ -65,6 +65,14 @@ app.get("/api/health", (req, res) => {
   res.status(200).json({ message: "Washa backend is running." });
 });
 
+// TEMPORARY - remove after debugging
+app.get("/api/debug-cors", (req, res) => {
+  res.json({
+    allowedOrigins: getAllowedOrigins(),
+    rawEnvValue: process.env.CORS_ORIGIN,
+  });
+});
+
 app.use("/api/auth", authRouter);
 
 const startServer = async () => {
