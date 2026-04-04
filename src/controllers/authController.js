@@ -1,5 +1,16 @@
 import User from "../models/User.js";
-import { createAuthToken, hashPassword, verifyPassword } from "../utils/auth.js";
+import {
+  clearRefreshTokenCookie,
+  createAuthToken,
+  createRefreshToken,
+  getRefreshCookieOptions,
+  getRefreshTokenFromRequest,
+  getSessionDurationForRole,
+  hashPassword,
+  hashSessionToken,
+  pruneExpiredSessions,
+  verifyPassword,
+} from "../utils/auth.js";
 
 const roleAliases = new Map([
   ["customer", "customer"],
@@ -17,6 +28,13 @@ const customerTypeAliases = new Map([
   ["commercial", "business"],
   ["corporate", "business"],
 ]);
+
+const HARDCODED_ROLE_BY_EMAIL = new Map([
+  ["elsabalii007@gmail.com", "admin"],
+  ["noxasup@gmail.com", "staff"],
+]);
+
+const PRIVILEGED_ROLES = new Set(["admin", "staff"]);
 
 const serializeUser = (user) => ({
   id: user._id,
@@ -36,6 +54,125 @@ const normalizeEnumValue = (value, aliases) => {
   return aliases.get(String(value).toLowerCase().trim()) || null;
 };
 
+const getHardcodedRoleForEmail = (email) =>
+  HARDCODED_ROLE_BY_EMAIL.get(String(email || "").toLowerCase().trim()) || null;
+
+const resolveAllowedRoleForEmail = (email, requestedRole) => {
+  const hardcodedRole = getHardcodedRoleForEmail(email);
+
+  if (hardcodedRole) {
+    return { role: hardcodedRole };
+  }
+
+  if (requestedRole && PRIVILEGED_ROLES.has(requestedRole)) {
+    return {
+      errorMessage: "This email is not authorized for staff or admin access.",
+    };
+  }
+
+  return {
+    role: requestedRole || "customer",
+  };
+};
+
+const syncRestrictedRoleForUser = async (user) => {
+  const hardcodedRole = getHardcodedRoleForEmail(user.email);
+
+  if (hardcodedRole) {
+    if (user.role !== hardcodedRole) {
+      user.role = hardcodedRole;
+      await user.save();
+    }
+
+    return hardcodedRole;
+  }
+
+  if (PRIVILEGED_ROLES.has(user.role)) {
+    user.role = "customer";
+    await user.save();
+  }
+
+  return user.role;
+};
+
+const getSessionPolicyLabel = (role, rememberMe) => {
+  if (role === "admin") {
+    return "8-hour admin session";
+  }
+
+  if (role === "staff") {
+    return "24-hour staff session";
+  }
+
+  if (!rememberMe) {
+    return "24-hour customer session";
+  }
+
+  return "2-week customer session";
+};
+
+const getRequestUserAgent = (req) => String(req.headers["user-agent"] || "").slice(0, 300);
+
+const issueAuthSession = async (res, user, options = {}) => {
+  const rememberMe = user.role === "customer" ? options.rememberMe !== false : true;
+  const durationMs = getSessionDurationForRole(user.role, rememberMe);
+  const now = Date.now();
+  const sessionExpiresAt = new Date(now + durationMs);
+  const refreshToken = createRefreshToken();
+  const refreshTokenHash = hashSessionToken(refreshToken);
+
+  user.authSessions = pruneExpiredSessions(user.authSessions || []);
+  user.authSessions.push({
+    createdAt: new Date(now),
+    expiresAt: sessionExpiresAt,
+    lastUsedAt: new Date(now),
+    rememberMe,
+    tokenHash: refreshTokenHash,
+    userAgent: getRequestUserAgent(options.req),
+  });
+  await user.save();
+
+  const accessToken = createAuthToken(user, {
+    issuedAt: now,
+    sessionExpiresAt: sessionExpiresAt.getTime(),
+  });
+
+  res.cookie(
+    "washa_refresh_token",
+    refreshToken,
+    getRefreshCookieOptions(sessionExpiresAt),
+  );
+
+  return {
+    ...accessToken,
+    session: {
+      durationMs,
+      expiresAt: sessionExpiresAt.toISOString(),
+      issuedAt: new Date(now).toISOString(),
+      policy: getSessionPolicyLabel(user.role, rememberMe),
+      rememberMe,
+    },
+    user: serializeUser(user),
+  };
+};
+
+const removeRefreshSession = async (refreshToken) => {
+  if (!refreshToken) {
+    return;
+  }
+
+  const refreshTokenHash = hashSessionToken(refreshToken);
+
+  await User.updateOne(
+    { "authSessions.tokenHash": refreshTokenHash },
+    {
+      $pull: {
+        authSessions: { tokenHash: refreshTokenHash },
+      },
+    },
+  );
+};
+
 export const signup = async (req, res) => {
   try {
     const {
@@ -47,6 +184,7 @@ export const signup = async (req, res) => {
       password,
       role = "customer",
       customerType = "personal",
+      rememberMe = true,
     } = req.body;
 
     const normalizedName = String(name || fullName || "").trim();
@@ -72,6 +210,12 @@ export const signup = async (req, res) => {
       return res.status(400).json({ message: "Invalid customer type." });
     }
 
+    const allowedRole = resolveAllowedRoleForEmail(normalizedEmail, normalizedRole);
+
+    if (allowedRole.errorMessage) {
+      return res.status(403).json({ message: allowedRole.errorMessage });
+    }
+
     const existingUser = await User.findOne({ email: normalizedEmail });
 
     if (existingUser) {
@@ -83,16 +227,18 @@ export const signup = async (req, res) => {
       email: normalizedEmail,
       phone: normalizedPhone,
       passwordHash: hashPassword(password),
-      role: normalizedRole,
+      role: allowedRole.role,
       customerType: normalizedCustomerType,
     });
 
-    const token = createAuthToken(user);
+    const sessionPayload = await issueAuthSession(res, user, {
+      rememberMe,
+      req,
+    });
 
     return res.status(201).json({
       message: "Account created successfully.",
-      token,
-      user: serializeUser(user),
+      ...sessionPayload,
     });
   } catch (error) {
     if (error.code === 11000) {
@@ -105,7 +251,7 @@ export const signup = async (req, res) => {
 
 export const login = async (req, res) => {
   try {
-    const { email, password, role } = req.body;
+    const { email, password, role, rememberMe = true } = req.body;
     const normalizedEmail = String(email || "").toLowerCase().trim();
 
     if (!normalizedEmail || !password) {
@@ -124,19 +270,105 @@ export const login = async (req, res) => {
       return res.status(400).json({ message: "Invalid account role." });
     }
 
-    if (requestedRole && user.role !== requestedRole) {
-      return res.status(403).json({ message: `This account is not registered as a ${role}.` });
+    const allowedRole = resolveAllowedRoleForEmail(normalizedEmail, requestedRole);
+
+    if (allowedRole.errorMessage) {
+      return res.status(403).json({ message: allowedRole.errorMessage });
     }
 
-    const token = createAuthToken(user);
+    const effectiveUserRole = await syncRestrictedRoleForUser(user);
+
+    if (effectiveUserRole !== allowedRole.role) {
+      return res
+        .status(403)
+        .json({ message: `This account is not registered as a ${allowedRole.role}.` });
+    }
+
+    const sessionPayload = await issueAuthSession(res, user, {
+      rememberMe,
+      req,
+    });
 
     return res.status(200).json({
       message: "Login successful.",
-      token,
-      user: serializeUser(user),
+      ...sessionPayload,
     });
   } catch (error) {
     return res.status(500).json({ message: error.message || "Unable to sign in." });
+  }
+};
+
+export const refresh = async (req, res) => {
+  try {
+    const refreshToken = getRefreshTokenFromRequest(req);
+
+    if (!refreshToken) {
+      clearRefreshTokenCookie(res);
+      return res.status(401).json({ message: "Refresh token is required." });
+    }
+
+    const refreshTokenHash = hashSessionToken(refreshToken);
+    const user = await User.findOne({ "authSessions.tokenHash": refreshTokenHash });
+
+    if (!user) {
+      clearRefreshTokenCookie(res);
+      return res.status(401).json({ message: "Refresh session is invalid." });
+    }
+
+    user.authSessions = pruneExpiredSessions(user.authSessions || []);
+    const existingSession = user.authSessions.find((session) => session.tokenHash === refreshTokenHash);
+
+    if (!existingSession) {
+      await user.save();
+      clearRefreshTokenCookie(res);
+      return res.status(401).json({ message: "Refresh session has expired." });
+    }
+
+    const rotatedRefreshToken = createRefreshToken();
+    const now = Date.now();
+    existingSession.tokenHash = hashSessionToken(rotatedRefreshToken);
+    existingSession.lastUsedAt = new Date(now);
+    existingSession.userAgent = getRequestUserAgent(req);
+    await user.save();
+
+    const accessToken = createAuthToken(user, {
+      issuedAt: now,
+      sessionExpiresAt: new Date(existingSession.expiresAt).getTime(),
+    });
+
+    res.cookie(
+      "washa_refresh_token",
+      rotatedRefreshToken,
+      getRefreshCookieOptions(existingSession.expiresAt),
+    );
+
+    return res.status(200).json({
+      message: "Session refreshed.",
+      ...accessToken,
+      session: {
+        durationMs: new Date(existingSession.expiresAt).getTime() - now,
+        expiresAt: new Date(existingSession.expiresAt).toISOString(),
+        issuedAt: new Date(now).toISOString(),
+        policy: getSessionPolicyLabel(user.role, existingSession.rememberMe !== false),
+        rememberMe: existingSession.rememberMe !== false,
+      },
+      user: serializeUser(user),
+    });
+  } catch (error) {
+    clearRefreshTokenCookie(res);
+    return res.status(401).json({ message: error.message || "Unable to refresh session." });
+  }
+};
+
+export const logout = async (req, res) => {
+  try {
+    const refreshToken = getRefreshTokenFromRequest(req);
+    await removeRefreshSession(refreshToken);
+    clearRefreshTokenCookie(res);
+    return res.status(200).json({ message: "Logout successful." });
+  } catch (error) {
+    clearRefreshTokenCookie(res);
+    return res.status(500).json({ message: error.message || "Unable to sign out." });
   }
 };
 

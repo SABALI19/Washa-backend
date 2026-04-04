@@ -33,6 +33,35 @@ const userSchema = new mongoose.Schema(
       enum: ["personal", "business"],
       default: "personal",
     },
+    authSessions: [
+      {
+        tokenHash: {
+          type: String,
+          required: true,
+        },
+        expiresAt: {
+          type: Date,
+          required: true,
+        },
+        createdAt: {
+          type: Date,
+          default: Date.now,
+        },
+        lastUsedAt: {
+          type: Date,
+          default: Date.now,
+        },
+        rememberMe: {
+          type: Boolean,
+          default: true,
+        },
+        userAgent: {
+          type: String,
+          trim: true,
+          default: "",
+        },
+      },
+    ],
   },
   {
     timestamps: true,
