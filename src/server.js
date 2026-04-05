@@ -29,7 +29,12 @@ const validateEnvironment = () => {
   const requiredVariables = ["MONGODB_URI"];
 
   if (process.env.NODE_ENV === "production") {
-    requiredVariables.push("AUTH_SECRET");
+    if (
+      !process.env.AUTH_SECRET &&
+      (!process.env.AUTH_ACCESS_SECRET || !process.env.AUTH_REFRESH_SECRET)
+    ) {
+      requiredVariables.push("AUTH_SECRET or both AUTH_ACCESS_SECRET and AUTH_REFRESH_SECRET");
+    }
   }
 
   const missingVariables = requiredVariables.filter((name) => !process.env[name]);

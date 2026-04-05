@@ -9,6 +9,7 @@ import {
   hashPassword,
   hashSessionToken,
   pruneExpiredSessions,
+  verifyRefreshToken,
   verifyPassword,
 } from "../utils/auth.js";
 
@@ -118,7 +119,11 @@ const issueAuthSession = async (res, user, options = {}) => {
   const durationMs = getSessionDurationForRole(user.role, rememberMe);
   const now = Date.now();
   const sessionExpiresAt = new Date(now + durationMs);
-  const refreshToken = createRefreshToken();
+  const refreshTokenPayload = createRefreshToken(user, {
+    expiresAt: sessionExpiresAt.getTime(),
+    issuedAt: now,
+  });
+  const refreshToken = refreshTokenPayload.token;
   const refreshTokenHash = hashSessionToken(refreshToken);
 
   user.authSessions = pruneExpiredSessions(user.authSessions || []);
@@ -307,8 +312,12 @@ export const refresh = async (req, res) => {
       return res.status(401).json({ message: "Refresh token is required." });
     }
 
+    const refreshPayload = verifyRefreshToken(refreshToken);
     const refreshTokenHash = hashSessionToken(refreshToken);
-    const user = await User.findOne({ "authSessions.tokenHash": refreshTokenHash });
+    const user = await User.findOne({
+      _id: refreshPayload.sub,
+      "authSessions.tokenHash": refreshTokenHash,
+    });
 
     if (!user) {
       clearRefreshTokenCookie(res);
@@ -324,9 +333,12 @@ export const refresh = async (req, res) => {
       return res.status(401).json({ message: "Refresh session has expired." });
     }
 
-    const rotatedRefreshToken = createRefreshToken();
     const now = Date.now();
-    existingSession.tokenHash = hashSessionToken(rotatedRefreshToken);
+    const rotatedRefreshTokenPayload = createRefreshToken(user, {
+      expiresAt: new Date(existingSession.expiresAt).getTime(),
+      issuedAt: now,
+    });
+    existingSession.tokenHash = hashSessionToken(rotatedRefreshTokenPayload.token);
     existingSession.lastUsedAt = new Date(now);
     existingSession.userAgent = getRequestUserAgent(req);
     await user.save();
@@ -338,7 +350,7 @@ export const refresh = async (req, res) => {
 
     res.cookie(
       "washa_refresh_token",
-      rotatedRefreshToken,
+      rotatedRefreshTokenPayload.token,
       getRefreshCookieOptions(existingSession.expiresAt),
     );
 
