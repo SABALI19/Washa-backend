@@ -1,6 +1,120 @@
 import crypto from "crypto";
 import mongoose from "mongoose";
 
+const verificationChecklistSchema = new mongoose.Schema(
+  {
+    categoryCorrect: {
+      default: false,
+      type: Boolean,
+    },
+    colorAccurate: {
+      default: false,
+      type: Boolean,
+    },
+    conditionAsDescribed: {
+      default: false,
+      type: Boolean,
+    },
+    itemMatchesPhoto: {
+      default: false,
+      type: Boolean,
+    },
+  },
+  {
+    _id: false,
+  },
+);
+
+const itemVerificationSchema = new mongoose.Schema(
+  {
+    checklist: {
+      default: () => ({}),
+      type: verificationChecklistSchema,
+    },
+    documentationImagePath: {
+      default: "",
+      select: false,
+      trim: true,
+      type: String,
+    },
+    documentationImageUrl: {
+      default: "",
+      trim: true,
+      type: String,
+    },
+    issueType: {
+      default: "",
+      trim: true,
+      type: String,
+    },
+    notes: {
+      default: "",
+      trim: true,
+      type: String,
+    },
+    severity: {
+      default: "",
+      enum: ["", "low", "medium", "high", "critical"],
+      type: String,
+    },
+    status: {
+      default: "pending",
+      enum: ["pending", "verified", "flagged", "missing"],
+      type: String,
+    },
+    updatedAt: {
+      default: null,
+      type: Date,
+    },
+    verifiedAt: {
+      default: null,
+      type: Date,
+    },
+  },
+  {
+    _id: false,
+  },
+);
+
+const orderVerificationSchema = new mongoose.Schema(
+  {
+    completedAt: {
+      default: null,
+      type: Date,
+    },
+    notifyCustomer: {
+      default: true,
+      type: Boolean,
+    },
+    orderNotes: {
+      default: "",
+      trim: true,
+      type: String,
+    },
+    startedAt: {
+      default: null,
+      type: Date,
+    },
+    status: {
+      default: "not-started",
+      enum: ["not-started", "in-progress", "completed"],
+      type: String,
+    },
+    updatedAt: {
+      default: null,
+      type: Date,
+    },
+    updatedBy: {
+      default: null,
+      ref: "User",
+      type: mongoose.Schema.Types.ObjectId,
+    },
+  },
+  {
+    _id: false,
+  },
+);
+
 export const orderItemSchema = new mongoose.Schema(
   {
     clientId: {
@@ -43,6 +157,10 @@ export const orderItemSchema = new mongoose.Schema(
       trim: true,
       default: "",
       select: false,
+    },
+    verification: {
+      default: () => ({}),
+      type: itemVerificationSchema,
     },
   },
   {
@@ -108,6 +226,10 @@ const orderSchema = new mongoose.Schema(
       type: String,
       enum: ["unpaid", "paid", "refunded"],
       default: "unpaid",
+    },
+    verification: {
+      default: () => ({}),
+      type: orderVerificationSchema,
     },
   },
   {
