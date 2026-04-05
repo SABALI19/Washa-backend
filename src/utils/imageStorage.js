@@ -15,6 +15,14 @@ const mimeExtensionMap = {
 
 const dataUrlPattern = /^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/;
 
+const getImageStorageMode = () =>
+  String(
+    process.env.IMAGE_STORAGE_MODE ||
+      (process.env.NODE_ENV === "production" ? "inline" : "disk"),
+  )
+    .toLowerCase()
+    .trim();
+
 export const ensureOrderUploadsDirectory = async () => {
   await fs.mkdir(orderUploadsDirectory, { recursive: true });
 };
@@ -35,6 +43,14 @@ export const saveImageDataUrl = async (dataUrl, prefix = "order-item") => {
     throw new Error("Unsupported image format.");
   }
 
+  if (getImageStorageMode() === "inline") {
+    return {
+      imageUrl: normalizedDataUrl,
+      imagePath: "",
+      mimeType,
+    };
+  }
+
   await ensureOrderUploadsDirectory();
 
   const fileName = `${prefix}-${Date.now()}-${crypto.randomBytes(6).toString("hex")}.${extension}`;
@@ -49,4 +65,3 @@ export const saveImageDataUrl = async (dataUrl, prefix = "order-item") => {
     mimeType,
   };
 };
-

@@ -75,12 +75,12 @@ app.get("/api/health", (req, res) => {
 });
 
 // TEMPORARY - remove after debugging
-app.get("/api/debug-cors", (req, res) => {
-  res.json({
-    allowedOrigins: getAllowedOrigins(),
-    rawEnvValue: process.env.CORS_ORIGIN,
-  });
-});
+// app.get("/api/debug-cors", (req, res) => {
+//   res.json({
+//     allowedOrigins: getAllowedOrigins(),
+//     rawEnvValue: process.env.CORS_ORIGIN,
+//   });
+// });
 
 app.use("/api/auth", authRouter);
 app.use("/api/orders", ordersRouter);
