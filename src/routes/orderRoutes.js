@@ -11,6 +11,7 @@ import {
   createOrder,
   getCustomerOrderById,
   getCustomerOrders,
+  getStaffDashboard,
   updateCustomerOrder,
 } from "../controllers/orderController.js";
 import { requireAuth } from "../middleware/authMiddleware.js";
@@ -18,6 +19,7 @@ import { requireAuth } from "../middleware/authMiddleware.js";
 const ordersRouter = Router();
 
 ordersRouter.use(requireAuth);
+ordersRouter.get("/staff/dashboard", getStaffDashboard);
 ordersRouter.get("/drafts/latest", getLatestCustomerDraft);
 ordersRouter.get("/drafts/:draftId", getCustomerDraftById);
 ordersRouter.post("/drafts", createDraft);
