@@ -2,6 +2,7 @@ import express from "express";
 import dotenv from "dotenv";
 import path from "path";
 import connectDB from "./dbconnections/dbConnection.js";
+import adminRouter from "./routes/adminRoutes.js";
 import authRouter from "./routes/authRoutes.js";
 import ordersRouter from "./routes/orderRoutes.js";
 
@@ -88,6 +89,7 @@ app.get("/api/health", (req, res) => {
 // });
 
 app.use("/api/auth", authRouter);
+app.use("/api/admin", adminRouter);
 app.use("/api/orders", ordersRouter);
 
 const startServer = async () => {
