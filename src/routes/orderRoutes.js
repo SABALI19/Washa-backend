@@ -8,9 +8,11 @@ import {
 } from "../controllers/orderDraftController.js";
 import {
   cancelCustomerOrder,
+  createCustomerOrderShareLink,
   createOrder,
   getCustomerOrderById,
   getCustomerOrders,
+  getSharedPickupOrder,
   getStaffDashboard,
   getStaffPickupSchedule,
   getStaffVerificationOrder,
@@ -21,6 +23,8 @@ import {
 import { requireAuth } from "../middleware/authMiddleware.js";
 
 const ordersRouter = Router();
+
+ordersRouter.get("/share/:shareToken", getSharedPickupOrder);
 
 ordersRouter.use(requireAuth);
 ordersRouter.get("/staff/dashboard", getStaffDashboard);
@@ -34,6 +38,7 @@ ordersRouter.post("/drafts", createDraft);
 ordersRouter.patch("/drafts/:draftId", updateDraft);
 ordersRouter.delete("/drafts/:draftId", deleteDraft);
 ordersRouter.get("/", getCustomerOrders);
+ordersRouter.post("/:orderId/share", createCustomerOrderShareLink);
 ordersRouter.get("/:orderId", getCustomerOrderById);
 ordersRouter.post("/", createOrder);
 ordersRouter.patch("/:orderId", updateCustomerOrder);

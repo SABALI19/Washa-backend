@@ -115,6 +115,24 @@ const orderVerificationSchema = new mongoose.Schema(
   },
 );
 
+const orderPickupShareSchema = new mongoose.Schema(
+  {
+    createdAt: {
+      type: Date,
+    },
+    token: {
+      index: true,
+      sparse: true,
+      trim: true,
+      type: String,
+      unique: true,
+    },
+  },
+  {
+    _id: false,
+  },
+);
+
 export const orderItemSchema = new mongoose.Schema(
   {
     clientId: {
@@ -230,6 +248,10 @@ const orderSchema = new mongoose.Schema(
     verification: {
       default: () => ({}),
       type: orderVerificationSchema,
+    },
+    pickupShare: {
+      default: () => ({}),
+      type: orderPickupShareSchema,
     },
   },
   {

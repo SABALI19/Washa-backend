@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import Order from "../models/Order.js";
 import PickupScheduleConfig from "../models/PickupScheduleConfig.js";
 import { saveImageDataUrl } from "../utils/imageStorage.js";
@@ -89,6 +90,31 @@ const serializeOrder = (order) => ({
   id: order._id,
   orderNumber: order.orderNumber,
   customer: serializeCustomer(order.customer),
+  serviceType: order.serviceType,
+  pickupAddress: order.pickupAddress,
+  deliveryAddress: order.deliveryAddress,
+  scheduledFor: order.scheduledFor,
+  notes: order.notes,
+  items: order.items,
+  totalAmount: order.totalAmount,
+  status: order.status,
+  paymentStatus: order.paymentStatus,
+  pickupShare: {
+    createdAt: order.pickupShare?.createdAt || null,
+    hasActiveLink: Boolean(order.pickupShare?.token),
+  },
+  createdAt: order.createdAt,
+  updatedAt: order.updatedAt,
+});
+
+const serializeSharedPickupOrder = (order) => ({
+  id: order._id,
+  orderNumber: order.orderNumber,
+  customer: order.customer
+    ? {
+        name: order.customer.name,
+      }
+    : null,
   serviceType: order.serviceType,
   pickupAddress: order.pickupAddress,
   deliveryAddress: order.deliveryAddress,
@@ -281,6 +307,14 @@ const getCustomerOrderQuery = (req) => ({
 
 const findCustomerOrder = async (req) =>
   Order.findOne(getCustomerOrderQuery(req)).populate("customer", "name email phone");
+
+const findCustomerOrderById = async (customerId, orderId) =>
+  Order.findOne({
+    _id: orderId,
+    customer: customerId,
+  }).populate("customer", "name email phone");
+
+const createPickupShareToken = () => crypto.randomBytes(18).toString("base64url");
 
 const getStaffOrderQuery = (orderId) => {
   const normalizedOrderId = normalizeText(orderId);
@@ -1210,6 +1244,71 @@ export const getCustomerOrderById = async (req, res) => {
     }
 
     return res.status(500).json({ message: error.message || "Unable to fetch order." });
+  }
+};
+
+export const createCustomerOrderShareLink = async (req, res) => {
+  try {
+    if (!requireCustomerRole(req, res)) {
+      return undefined;
+    }
+
+    const order = await findCustomerOrderById(req.user._id, req.params.orderId);
+
+    if (!order) {
+      return res.status(404).json({ message: "Order not found." });
+    }
+
+    if (!order.pickupShare?.token) {
+      order.pickupShare = {
+        createdAt: new Date(),
+        token: createPickupShareToken(),
+      };
+      order.markModified("pickupShare");
+      await order.save();
+    }
+
+    return res.status(200).json({
+      message: "Pickup share link is ready.",
+      share: {
+        generatedAt: order.pickupShare.createdAt,
+        shareToken: order.pickupShare.token,
+      },
+    });
+  } catch (error) {
+    if (error.name === "CastError") {
+      return res.status(404).json({ message: "Order not found." });
+    }
+
+    return res.status(500).json({
+      message: error.message || "Unable to generate a pickup share link.",
+    });
+  }
+};
+
+export const getSharedPickupOrder = async (req, res) => {
+  try {
+    const shareToken = normalizeText(req.params.shareToken);
+
+    if (!shareToken) {
+      return res.status(400).json({ message: "Share token is required." });
+    }
+
+    const order = await Order.findOne({
+      "pickupShare.token": shareToken,
+    }).populate("customer", "name");
+
+    if (!order) {
+      return res.status(404).json({ message: "Shared pickup order not found." });
+    }
+
+    return res.status(200).json({
+      order: serializeSharedPickupOrder(order),
+    });
+  } catch (error) {
+    return res.status(500).json({
+      message: error.message || "Unable to load the shared pickup order.",
+    });
   }
 };
 
