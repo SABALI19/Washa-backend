@@ -13,8 +13,8 @@ const PORT = process.env.PORT || 9000;
 const DEFAULT_ALLOWED_ORIGINS = [
   "http://localhost:5173",
   "http://localhost:3000",
-  "https://washa.pxxl.click",
-  "https://washa.pxxl.pro",
+  "https://washa-seven.vercel.app",
+  
 ];
 
 const getAllowedOrigins = () => {
