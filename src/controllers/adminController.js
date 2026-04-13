@@ -7,6 +7,13 @@ const DISPUTE_ACTIVE_STATUSES = new Set(["Open", "In Review"]);
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
 const HOUR_IN_MS = 60 * 60 * 1000;
 const DEFAULT_ANALYTICS_DAYS = 7;
+const ANALYTICS_RANGE_DAYS = {
+  day: 1,
+  month: 30,
+  quarter: 90,
+  week: 7,
+  year: 365,
+};
 
 const formatCurrency = (value) =>
   new Intl.NumberFormat("en-US", {
@@ -42,6 +49,12 @@ const getEndOfDay = (value = new Date()) => {
 };
 
 const addDays = (value, days) => new Date(new Date(value).getTime() + days * DAY_IN_MS);
+
+const getAnalyticsRangeDays = (value) => {
+  const normalizedValue = String(value || "").trim().toLowerCase();
+
+  return ANALYTICS_RANGE_DAYS[normalizedValue] || DEFAULT_ANALYTICS_DAYS;
+};
 
 const isWithinRange = (value, start, end) => {
   if (!value) {
@@ -706,14 +719,15 @@ export const getAdminAnalytics = async (req, res) => {
       User.find({ role: "customer" }).select("createdAt"),
     ]);
     const now = new Date();
+    const rangeDays = getAnalyticsRangeDays(req.query.range);
     const rangeEnd = getEndOfDay(now);
-    const rangeStart = getStartOfDay(addDays(now, -(DEFAULT_ANALYTICS_DAYS - 1)));
-    const previousRangeStart = getStartOfDay(addDays(rangeStart, -DEFAULT_ANALYTICS_DAYS));
-    const previousRangeEnd = getEndOfDay(addDays(rangeEnd, -DEFAULT_ANALYTICS_DAYS));
+    const rangeStart = getStartOfDay(addDays(now, -(rangeDays - 1)));
+    const previousRangeStart = getStartOfDay(addDays(rangeStart, -rangeDays));
+    const previousRangeEnd = getEndOfDay(addDays(rangeEnd, -rangeDays));
     const rangeOrders = getOrdersInDateRange(orders, rangeStart, rangeEnd);
     const previousRangeOrders = getOrdersInDateRange(orders, previousRangeStart, previousRangeEnd);
     const rangeDisputes = buildDisputeRecords(rangeOrders);
-    const orderVolumeTrends = buildOrderVolumeTrend(orders, DEFAULT_ANALYTICS_DAYS);
+    const orderVolumeTrends = buildOrderVolumeTrend(orders, rangeDays);
     const completedRangeOrders = rangeOrders.filter((order) => order.status === "completed");
     const averageCompletionHours =
       completedRangeOrders.reduce((sum, order) => {
@@ -736,7 +750,7 @@ export const getAdminAnalytics = async (req, res) => {
     const totalOrdersCount = Math.max(rangeOrders.length, 1);
     const qualityMetrics = buildQualityMetrics(rangeOrders, rangeDisputes);
     const financialPerformance = buildFinancialPerformance(rangeOrders, customers);
-    const processingPerformance = buildProcessingStageRows(rangeOrders);
+    const processingPerformance = getProcessingStageRows(rangeOrders);
     const processingBottleneck =
       [...processingPerformance]
         .filter((item) => !["Completed", "Cancelled"].includes(item.label))
