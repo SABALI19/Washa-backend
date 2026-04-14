@@ -1,4 +1,5 @@
 import Order from "../models/Order.js";
+import StaffAttendance from "../models/StaffAttendance.js";
 import User from "../models/User.js";
 
 const ACTIVE_ORDER_STATUSES = new Set(["pending", "confirmed", "in-progress"]);
@@ -8,9 +9,11 @@ const DAY_IN_MS = 24 * 60 * 60 * 1000;
 const HOUR_IN_MS = 60 * 60 * 1000;
 const DEFAULT_ANALYTICS_DAYS = 7;
 const ANALYTICS_RANGE_DAYS = {
+  custom: 7,
   day: 1,
   month: 30,
   quarter: 90,
+  today: 1,
   week: 7,
   year: 365,
 };
@@ -610,19 +613,27 @@ export const getAdminDashboard = async (req, res) => {
       return undefined;
     }
 
-    const orders = await loadOrdersForAdmin();
-    const disputes = buildDisputeRecords(orders);
+    const [orders, staffOnDutyCount] = await Promise.all([
+      loadOrdersForAdmin(),
+      StaffAttendance.countDocuments({
+        clockedOutAt: null,
+        status: "active",
+      }),
+    ]);
     const now = new Date();
-    const todayStart = getStartOfDay(now);
-    const todayEnd = getEndOfDay(now);
-    const yesterdayStart = addDays(todayStart, -1);
-    const yesterdayEnd = getEndOfDay(yesterdayStart);
-    const todaysOrders = getOrdersInDateRange(orders, todayStart, todayEnd);
-    const yesterdaysOrders = getOrdersInDateRange(orders, yesterdayStart, yesterdayEnd);
-    const todaysRevenue = getRevenueForOrders(todaysOrders);
-    const yesterdaysRevenue = getRevenueForOrders(yesterdaysOrders);
-    const activeOrders = orders.filter((order) => ACTIVE_ORDER_STATUSES.has(order.status));
-    const activeOrdersYesterday = yesterdaysOrders.filter((order) => ACTIVE_ORDER_STATUSES.has(order.status));
+    const rangeDays = getAnalyticsRangeDays(req.query.range);
+    const rangeEnd = getEndOfDay(now);
+    const rangeStart = getStartOfDay(addDays(now, -(rangeDays - 1)));
+    const previousRangeStart = getStartOfDay(addDays(rangeStart, -rangeDays));
+    const previousRangeEnd = getEndOfDay(addDays(rangeEnd, -rangeDays));
+    const rangeOrders = getOrdersInDateRange(orders, rangeStart, rangeEnd);
+    const previousRangeOrders = getOrdersInDateRange(orders, previousRangeStart, previousRangeEnd);
+    const disputes = buildDisputeRecords(rangeOrders);
+    const allDisputes = buildDisputeRecords(orders);
+    const rangeRevenue = getRevenueForOrders(rangeOrders);
+    const previousRangeRevenue = getRevenueForOrders(previousRangeOrders);
+    const activeOrders = rangeOrders.filter((order) => ACTIVE_ORDER_STATUSES.has(order.status));
+    const activeOrdersPreviousRange = previousRangeOrders.filter((order) => ACTIVE_ORDER_STATUSES.has(order.status));
     const overdueOrders = orders.filter(
       (order) =>
         order.scheduledFor &&
@@ -630,14 +641,16 @@ export const getAdminDashboard = async (req, res) => {
         ACTIVE_ORDER_STATUSES.has(order.status),
     );
     const issueFreeOrders = Math.max(
-      orders.filter((order) => order.status === "completed").length -
+      rangeOrders.filter((order) => order.status === "completed").length -
         disputes.filter((dispute) => dispute.status !== "Resolved").length,
       0,
     );
-    const completedOrders = Math.max(orders.filter((order) => order.status === "completed").length, 1);
+    const completedOrders = Math.max(rangeOrders.filter((order) => order.status === "completed").length, 1);
+    const peakHours = buildPeakHours(rangeOrders);
 
     return res.status(200).json({
       dashboard: {
+        activeRange: String(req.query.range || "today"),
         alerts: [
           {
             id: "overdue",
@@ -647,7 +660,7 @@ export const getAdminDashboard = async (req, res) => {
           },
           {
             id: "disputes",
-            text: `${formatNumber(disputes.filter((dispute) => DISPUTE_ACTIVE_STATUSES.has(dispute.status)).length)} disputes need review`,
+            text: `${formatNumber(allDisputes.filter((dispute) => DISPUTE_ACTIVE_STATUSES.has(dispute.status)).length)} disputes need review`,
             title: "Pending Disputes",
             tone: "warning",
           },
@@ -658,13 +671,31 @@ export const getAdminDashboard = async (req, res) => {
             tone: "info",
           },
         ],
-        currentOrderStatus: {
-          items: buildOrderStatusBreakdown(orders),
+        businessInformation: {
+          name:
+            process.env.BUSINESS_NAME ||
+            process.env.WASHA_BUSINESS_NAME ||
+            "Clean & Fresh Laundry",
+          staffOnDutyCount,
+          staffOnDutyLabel: `${formatNumber(staffOnDutyCount)} staff on duty`,
+          status: "Operating",
+          statusLabel: "Operating",
         },
+        currentOrderStatus: {
+          items: buildOrderStatusBreakdown(rangeOrders),
+        },
+        dateRangeLabel: `${new Intl.DateTimeFormat("en-US", {
+          day: "numeric",
+          month: "long",
+        }).format(rangeStart)} - ${new Intl.DateTimeFormat("en-US", {
+          day: "numeric",
+          month: "long",
+          year: "numeric",
+        }).format(rangeEnd)}`,
         generatedAt: now.toISOString(),
         orderVolumeTrend: {
-          dataPoints: buildPeakHours(todaysOrders).map((item) => item.value),
-          labels: buildPeakHours(todaysOrders).map((item) => item.label.replace("-", " - ")),
+          dataPoints: peakHours.map((item) => item.value),
+          labels: peakHours.map((item) => item.label.replace("-", " - ")),
         },
         quickActions: [
           "View All Orders",
@@ -672,25 +703,25 @@ export const getAdminDashboard = async (req, res) => {
           "Performance Reports",
           "Staff Schedule",
         ],
-        recentActivity: buildRecentActivity(orders, disputes),
+        recentActivity: buildRecentActivity(rangeOrders, disputes),
         stats: [
           {
-            change: formatSignedPercentChange(todaysOrders.length, yesterdaysOrders.length),
+            change: formatSignedPercentChange(rangeOrders.length, previousRangeOrders.length),
             id: "orders-today",
-            title: "Total Orders Today",
-            value: formatNumber(todaysOrders.length),
+            title: rangeDays === 1 ? "Total Orders Today" : "Total Orders",
+            value: formatNumber(rangeOrders.length),
           },
           {
-            change: formatSignedPercentChange(activeOrders.length, activeOrdersYesterday.length),
+            change: formatSignedPercentChange(activeOrders.length, activeOrdersPreviousRange.length),
             id: "active-orders",
             title: "Active Orders",
             value: formatNumber(activeOrders.length),
           },
           {
-            change: formatSignedPercentChange(todaysRevenue, yesterdaysRevenue),
+            change: formatSignedPercentChange(rangeRevenue, previousRangeRevenue),
             id: "revenue-today",
-            title: "Revenue Today",
-            value: formatCurrency(todaysRevenue),
+            title: rangeDays === 1 ? "Revenue Today" : "Revenue",
+            value: formatCurrency(rangeRevenue),
           },
           {
             id: "fulfillment-rate",
@@ -704,6 +735,63 @@ export const getAdminDashboard = async (req, res) => {
   } catch (error) {
     return res.status(500).json({
       message: error.message || "Unable to fetch the admin dashboard.",
+    });
+  }
+};
+
+export const getAdminStaffManagement = async (req, res) => {
+  try {
+    if (!requireAdminRole(req, res)) {
+      return undefined;
+    }
+
+    const staffMembers = await User.find({ role: "staff" })
+      .select("createdAt email name phone role updatedAt")
+      .sort({ name: 1 });
+    const staffIds = staffMembers.map((staff) => staff._id);
+    const activeAttendanceRecords = await StaffAttendance.find({
+      clockedOutAt: null,
+      staff: { $in: staffIds },
+      status: "active",
+    }).sort({ clockedInAt: -1 });
+    const activeAttendanceByStaffId = new Map(
+      activeAttendanceRecords.map((attendance) => [
+        attendance.staff.toString(),
+        attendance,
+      ]),
+    );
+    const staffRows = staffMembers.map((staff) => {
+      const activeAttendance = activeAttendanceByStaffId.get(staff._id.toString());
+
+      return {
+        clockedInAt: activeAttendance?.clockedInAt || null,
+        clockedInAtLabel: activeAttendance?.clockedInAt
+          ? formatDateTime(activeAttendance.clockedInAt)
+          : "Not on duty",
+        email: staff.email,
+        id: staff._id,
+        isOnDuty: Boolean(activeAttendance),
+        name: staff.name,
+        phone: staff.phone,
+        role: staff.role,
+        status: activeAttendance ? "On Duty" : "Off Duty",
+      };
+    });
+
+    return res.status(200).json({
+      staffManagement: {
+        generatedAt: new Date().toISOString(),
+        rows: staffRows,
+        summary: {
+          offDutyCount: staffRows.filter((staff) => !staff.isOnDuty).length,
+          onDutyCount: staffRows.filter((staff) => staff.isOnDuty).length,
+          totalStaff: staffRows.length,
+        },
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({
+      message: error.message || "Unable to fetch staff management.",
     });
   }
 };

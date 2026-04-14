@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import Order from "../models/Order.js";
 import PickupScheduleConfig from "../models/PickupScheduleConfig.js";
+import StaffAttendance from "../models/StaffAttendance.js";
 import { saveImageDataUrl } from "../utils/imageStorage.js";
 import {
   calculateTotalAmount,
@@ -1356,19 +1357,132 @@ export const getStaffDashboard = async (req, res) => {
       return undefined;
     }
 
-    const orders = await Order.find({
-      status: { $ne: "cancelled" },
-    })
-      .sort({ createdAt: -1 })
-      .limit(50)
-      .populate("customer", "name email phone");
+    const [orders, activeAttendance] = await Promise.all([
+      Order.find({
+        status: { $ne: "cancelled" },
+      })
+        .sort({ createdAt: -1 })
+        .limit(50)
+        .populate("customer", "name email phone"),
+      StaffAttendance.findOne({
+        clockedOutAt: null,
+        staff: req.user._id,
+        status: "active",
+      }).sort({ clockedInAt: -1 }),
+    ]);
+    const dashboard = buildStaffDashboardPayload(orders, req.user);
 
     return res.status(200).json({
-      dashboard: buildStaffDashboardPayload(orders, req.user),
+      dashboard: {
+        ...dashboard,
+        attendance: {
+          clockedInAt: activeAttendance?.clockedInAt || null,
+          id: activeAttendance?._id || null,
+          isOnDuty: Boolean(activeAttendance),
+          status: activeAttendance?.status || "off-duty",
+        },
+      },
     });
   } catch (error) {
     return res.status(500).json({
       message: error.message || "Unable to fetch the staff dashboard.",
+    });
+  }
+};
+
+export const getStaffAttendanceStatus = async (req, res) => {
+  try {
+    if (!requireStaffRole(req, res)) {
+      return undefined;
+    }
+
+    const activeAttendance = await StaffAttendance.findOne({
+      clockedOutAt: null,
+      staff: req.user._id,
+      status: "active",
+    }).sort({ clockedInAt: -1 });
+
+    return res.status(200).json({
+      attendance: {
+        clockedInAt: activeAttendance?.clockedInAt || null,
+        id: activeAttendance?._id || null,
+        isOnDuty: Boolean(activeAttendance),
+        status: activeAttendance?.status || "off-duty",
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({
+      message: error.message || "Unable to fetch staff attendance status.",
+    });
+  }
+};
+
+export const clockInStaffAttendance = async (req, res) => {
+  try {
+    if (!requireStaffRole(req, res)) {
+      return undefined;
+    }
+
+    const activeAttendance = await StaffAttendance.findOne({
+      clockedOutAt: null,
+      staff: req.user._id,
+      status: "active",
+    }).sort({ clockedInAt: -1 });
+
+    if (activeAttendance) {
+      return res.status(200).json({
+        attendance: activeAttendance,
+        message: "Staff member is already on duty.",
+      });
+    }
+
+    const attendance = await StaffAttendance.create({
+      notes: normalizeText(req.body?.notes),
+      source: "dashboard",
+      staff: req.user._id,
+    });
+
+    return res.status(201).json({
+      attendance,
+      message: "Staff member clocked in.",
+    });
+  } catch (error) {
+    return res.status(500).json({
+      message: error.message || "Unable to clock staff member in.",
+    });
+  }
+};
+
+export const clockOutStaffAttendance = async (req, res) => {
+  try {
+    if (!requireStaffRole(req, res)) {
+      return undefined;
+    }
+
+    const activeAttendance = await StaffAttendance.findOne({
+      clockedOutAt: null,
+      staff: req.user._id,
+      status: "active",
+    }).sort({ clockedInAt: -1 });
+
+    if (!activeAttendance) {
+      return res.status(404).json({
+        message: "No active staff attendance record was found.",
+      });
+    }
+
+    activeAttendance.clockedOutAt = new Date();
+    activeAttendance.status = "completed";
+    activeAttendance.notes = normalizeText(req.body?.notes) || activeAttendance.notes;
+    await activeAttendance.save();
+
+    return res.status(200).json({
+      attendance: activeAttendance,
+      message: "Staff member clocked out.",
+    });
+  } catch (error) {
+    return res.status(500).json({
+      message: error.message || "Unable to clock staff member out.",
     });
   }
 };

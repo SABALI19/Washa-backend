@@ -8,11 +8,14 @@ import {
 } from "../controllers/orderDraftController.js";
 import {
   cancelCustomerOrder,
+  clockInStaffAttendance,
+  clockOutStaffAttendance,
   createCustomerOrderShareLink,
   createOrder,
   getCustomerOrderById,
   getCustomerOrders,
   getSharedPickupOrder,
+  getStaffAttendanceStatus,
   getStaffDashboard,
   getStaffPickupSchedule,
   getStaffVerificationOrder,
@@ -27,6 +30,9 @@ const ordersRouter = Router();
 ordersRouter.get("/share/:shareToken", getSharedPickupOrder);
 
 ordersRouter.use(requireAuth);
+ordersRouter.get("/staff/attendance", getStaffAttendanceStatus);
+ordersRouter.post("/staff/attendance/clock-in", clockInStaffAttendance);
+ordersRouter.patch("/staff/attendance/clock-out", clockOutStaffAttendance);
 ordersRouter.get("/staff/dashboard", getStaffDashboard);
 ordersRouter.get("/staff/pickups", getStaffPickupSchedule);
 ordersRouter.get("/staff/verification/:orderId", getStaffVerificationOrder);
