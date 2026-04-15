@@ -42,10 +42,16 @@ const serializeUser = (user) => ({
   name: user.name,
   email: user.email,
   phone: user.phone,
+  profileImage: user.profileImage || "",
   role: user.role,
   customerType: user.customerType,
   createdAt: user.createdAt,
 });
+
+const normalizeProfileImage = (value) => String(value || "").trim();
+
+const isSupportedProfileImage = (value) =>
+  !value || /^data:image\/(png|jpe?g|webp);base64,/i.test(value);
 
 const normalizeEnumValue = (value, aliases) => {
   if (value === undefined || value === null || value === "") {
@@ -381,6 +387,30 @@ export const logout = async (req, res) => {
   } catch (error) {
     clearRefreshTokenCookie(res);
     return res.status(500).json({ message: error.message || "Unable to sign out." });
+  }
+};
+
+export const updateProfileImage = async (req, res) => {
+  try {
+    const profileImage = normalizeProfileImage(req.body?.profileImage);
+
+    if (!isSupportedProfileImage(profileImage)) {
+      return res.status(400).json({
+        message: "Profile image must be a PNG, JPG, or WebP image.",
+      });
+    }
+
+    req.user.profileImage = profileImage;
+    await req.user.save();
+
+    return res.status(200).json({
+      message: profileImage ? "Profile image updated." : "Profile image removed.",
+      user: serializeUser(req.user),
+    });
+  } catch (error) {
+    return res.status(500).json({
+      message: error.message || "Unable to update profile image.",
+    });
   }
 };
 
