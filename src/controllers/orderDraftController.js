@@ -49,6 +49,19 @@ const requireCustomerRole = (req, res) => {
   return true;
 };
 
+const findLatestDraftForCustomer = (customerId) =>
+  OrderDraft.findOne({ customer: customerId }).sort({ updatedAt: -1 });
+
+const deleteDuplicateCustomerDrafts = async (customerId, keepDraftId) => {
+  const filter = { customer: customerId };
+
+  if (keepDraftId) {
+    filter._id = { $ne: keepDraftId };
+  }
+
+  await OrderDraft.deleteMany(filter);
+};
+
 const findCustomerDraft = async (req) =>
   OrderDraft.findOne({
     _id: req.params.draftId,
@@ -122,9 +135,10 @@ export const getLatestCustomerDraft = async (req, res) => {
       return undefined;
     }
 
-    const draft = await OrderDraft.findOne({ customer: req.user._id })
-      .sort({ updatedAt: -1 })
-      .populate("customer", "name email phone");
+    const draft = await findLatestDraftForCustomer(req.user._id).populate(
+      "customer",
+      "name email phone",
+    );
 
     if (!draft) {
       return res.status(404).json({ message: "No draft order found." });
@@ -164,9 +178,15 @@ export const createDraft = async (req, res) => {
       return undefined;
     }
 
-    const draft = new OrderDraft({
-      customer: req.user._id,
-    });
+    let draft = await findLatestDraftForCustomer(req.user._id);
+    const isNewDraft = !draft;
+
+    if (!draft) {
+      draft = new OrderDraft({
+        customer: req.user._id,
+      });
+    }
+
     const validationError = await applyDraftPayload(draft, req.body);
 
     if (validationError) {
@@ -174,9 +194,10 @@ export const createDraft = async (req, res) => {
     }
 
     await draft.save();
+    await deleteDuplicateCustomerDrafts(req.user._id, draft._id);
 
-    return res.status(201).json({
-      message: "Draft saved successfully.",
+    return res.status(isNewDraft ? 201 : 200).json({
+      message: isNewDraft ? "Draft saved successfully." : "Draft updated successfully.",
       draft: serializeDraft(draft),
     });
   } catch (error) {
@@ -229,7 +250,7 @@ export const deleteDraft = async (req, res) => {
       return res.status(404).json({ message: "Draft order not found." });
     }
 
-    await draft.deleteOne();
+    await deleteDuplicateCustomerDrafts(req.user._id);
 
     return res.status(200).json({ message: "Draft deleted successfully." });
   } catch (error) {
