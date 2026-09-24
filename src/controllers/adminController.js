@@ -1,6 +1,8 @@
 import Order from "../models/Order.js";
 import StaffAttendance from "../models/StaffAttendance.js";
 import User from "../models/User.js";
+import { hashPassword } from "../utils/auth.js";
+import { createNotificationForUser } from "../utils/notifications.js";
 
 const ACTIVE_ORDER_STATUSES = new Set(["pending", "confirmed", "in-progress"]);
 const DISPUTE_ITEM_STATUSES = new Set(["flagged", "missing"]);
@@ -601,6 +603,55 @@ const requireAdminRole = (req, res) => {
   return true;
 };
 
+const normalizeText = (value) => String(value || "").trim();
+
+const normalizeEmail = (value) => normalizeText(value).toLowerCase();
+
+const serializeStaffRow = (staff, activeAttendance = null) => ({
+  clockedInAt: activeAttendance?.clockedInAt || null,
+  clockedInAtLabel: activeAttendance?.clockedInAt
+    ? formatDateTime(activeAttendance.clockedInAt)
+    : "Not on duty",
+  email: staff.email,
+  id: staff._id,
+  isOnDuty: Boolean(activeAttendance),
+  name: staff.name,
+  phone: staff.phone,
+  role: staff.role,
+  status: activeAttendance ? "On Duty" : "Off Duty",
+});
+
+const buildStaffManagementPayload = async () => {
+  const staffMembers = await User.find({ role: "staff" })
+    .select("createdAt email name phone role updatedAt")
+    .sort({ name: 1 });
+  const staffIds = staffMembers.map((staff) => staff._id);
+  const activeAttendanceRecords = await StaffAttendance.find({
+    clockedOutAt: null,
+    staff: { $in: staffIds },
+    status: "active",
+  }).sort({ clockedInAt: -1 });
+  const activeAttendanceByStaffId = new Map(
+    activeAttendanceRecords.map((attendance) => [
+      attendance.staff.toString(),
+      attendance,
+    ]),
+  );
+  const staffRows = staffMembers.map((staff) =>
+    serializeStaffRow(staff, activeAttendanceByStaffId.get(staff._id.toString())),
+  );
+
+  return {
+    generatedAt: new Date().toISOString(),
+    rows: staffRows,
+    summary: {
+      offDutyCount: staffRows.filter((staff) => !staff.isOnDuty).length,
+      onDutyCount: staffRows.filter((staff) => staff.isOnDuty).length,
+      totalStaff: staffRows.length,
+    },
+  };
+};
+
 const loadOrdersForAdmin = async () =>
   Order.find({})
     .sort({ updatedAt: -1 })
@@ -745,53 +796,75 @@ export const getAdminStaffManagement = async (req, res) => {
       return undefined;
     }
 
-    const staffMembers = await User.find({ role: "staff" })
-      .select("createdAt email name phone role updatedAt")
-      .sort({ name: 1 });
-    const staffIds = staffMembers.map((staff) => staff._id);
-    const activeAttendanceRecords = await StaffAttendance.find({
-      clockedOutAt: null,
-      staff: { $in: staffIds },
-      status: "active",
-    }).sort({ clockedInAt: -1 });
-    const activeAttendanceByStaffId = new Map(
-      activeAttendanceRecords.map((attendance) => [
-        attendance.staff.toString(),
-        attendance,
-      ]),
-    );
-    const staffRows = staffMembers.map((staff) => {
-      const activeAttendance = activeAttendanceByStaffId.get(staff._id.toString());
-
-      return {
-        clockedInAt: activeAttendance?.clockedInAt || null,
-        clockedInAtLabel: activeAttendance?.clockedInAt
-          ? formatDateTime(activeAttendance.clockedInAt)
-          : "Not on duty",
-        email: staff.email,
-        id: staff._id,
-        isOnDuty: Boolean(activeAttendance),
-        name: staff.name,
-        phone: staff.phone,
-        role: staff.role,
-        status: activeAttendance ? "On Duty" : "Off Duty",
-      };
-    });
-
     return res.status(200).json({
-      staffManagement: {
-        generatedAt: new Date().toISOString(),
-        rows: staffRows,
-        summary: {
-          offDutyCount: staffRows.filter((staff) => !staff.isOnDuty).length,
-          onDutyCount: staffRows.filter((staff) => staff.isOnDuty).length,
-          totalStaff: staffRows.length,
-        },
-      },
+      staffManagement: await buildStaffManagementPayload(),
     });
   } catch (error) {
     return res.status(500).json({
       message: error.message || "Unable to fetch staff management.",
+    });
+  }
+};
+
+export const createAdminStaffMember = async (req, res) => {
+  try {
+    if (!requireAdminRole(req, res)) {
+      return undefined;
+    }
+
+    const name = normalizeText(req.body?.name || req.body?.fullName);
+    const email = normalizeEmail(req.body?.email);
+    const phone = normalizeText(req.body?.phone || req.body?.phoneNumber);
+    const password = String(req.body?.password || "");
+
+    if (!name || !email || !phone || !password) {
+      return res.status(400).json({
+        message: "Staff name, email, phone, and temporary password are required.",
+      });
+    }
+
+    if (password.length < 8) {
+      return res.status(400).json({
+        message: "Temporary password must be at least 8 characters long.",
+      });
+    }
+
+    const existingUser = await User.findOne({ email });
+
+    if (existingUser) {
+      return res.status(409).json({
+        message: "An account with this email already exists.",
+      });
+    }
+
+    const staffUser = await User.create({
+      customerType: "personal",
+      email,
+      name,
+      passwordHash: hashPassword(password),
+      phone,
+      role: "staff",
+    });
+
+    await createNotificationForUser(staffUser._id, {
+      actor: req.user._id,
+      message:
+        "Your Washa staff account has been created. Use the Staff tab to sign in with your temporary password.",
+      title: "Staff account created",
+      type: "account-created",
+    });
+
+    return res.status(201).json({
+      message: "Staff account created successfully.",
+      staffManagement: await buildStaffManagementPayload(),
+    });
+  } catch (error) {
+    if (error.code === 11000) {
+      return res.status(409).json({ message: "An account with this email already exists." });
+    }
+
+    return res.status(500).json({
+      message: error.message || "Unable to create staff account.",
     });
   }
 };

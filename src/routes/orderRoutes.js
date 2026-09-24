@@ -19,6 +19,7 @@ import {
   getStaffDashboard,
   getStaffPickupSchedule,
   getStaffVerificationOrder,
+  updateStaffDeliveryStatus,
   updateStaffPickupCapacity,
   updateStaffVerificationOrder,
   updateCustomerOrder,
@@ -38,6 +39,7 @@ ordersRouter.get("/staff/pickups", getStaffPickupSchedule);
 ordersRouter.get("/staff/verification/:orderId", getStaffVerificationOrder);
 ordersRouter.patch("/staff/pickups/capacity", updateStaffPickupCapacity);
 ordersRouter.patch("/staff/verification/:orderId", updateStaffVerificationOrder);
+ordersRouter.patch("/staff/delivery/:orderId", updateStaffDeliveryStatus);
 ordersRouter.get("/drafts/latest", getLatestCustomerDraft);
 ordersRouter.get("/drafts/:draftId", getCustomerDraftById);
 ordersRouter.post("/drafts", createDraft);

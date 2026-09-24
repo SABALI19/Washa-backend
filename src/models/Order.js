@@ -133,6 +133,47 @@ const orderPickupShareSchema = new mongoose.Schema(
   },
 );
 
+const orderDeliverySchema = new mongoose.Schema(
+  {
+    deliveredAt: {
+      default: null,
+      type: Date,
+    },
+    pickedUpAt: {
+      default: null,
+      type: Date,
+    },
+    sentAt: {
+      default: null,
+      type: Date,
+    },
+    status: {
+      default: "awaiting-pickup",
+      enum: [
+        "awaiting-pickup",
+        "picked-up",
+        "processing",
+        "ready-for-delivery",
+        "out-for-delivery",
+        "delivered",
+      ],
+      type: String,
+    },
+    updatedAt: {
+      default: null,
+      type: Date,
+    },
+    updatedBy: {
+      default: null,
+      ref: "User",
+      type: mongoose.Schema.Types.ObjectId,
+    },
+  },
+  {
+    _id: false,
+  },
+);
+
 export const orderItemSchema = new mongoose.Schema(
   {
     clientId: {
@@ -244,6 +285,10 @@ const orderSchema = new mongoose.Schema(
       type: String,
       enum: ["unpaid", "paid", "refunded"],
       default: "unpaid",
+    },
+    delivery: {
+      default: () => ({}),
+      type: orderDeliverySchema,
     },
     verification: {
       default: () => ({}),

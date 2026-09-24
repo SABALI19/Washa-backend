@@ -1,5 +1,9 @@
 import User from "../models/User.js";
 import {
+  createNotificationForUser,
+  createNotificationsForRoles,
+} from "../utils/notifications.js";
+import {
   clearRefreshTokenCookie,
   createAuthToken,
   createRefreshToken,
@@ -30,12 +34,20 @@ const customerTypeAliases = new Map([
   ["corporate", "business"],
 ]);
 
-const HARDCODED_ROLE_BY_EMAIL = new Map([
-  ["elsabalii007@gmail.com", "admin"],
-  ["noxasup@gmail.com", "staff"],
-]);
-
 const PRIVILEGED_ROLES = new Set(["admin", "staff"]);
+
+const getBootstrapAdminEmails = () => {
+  const configuredEmails = String(process.env.AUTH_ADMIN_EMAILS || "")
+    .split(",")
+    .map((email) => email.toLowerCase().trim())
+    .filter(Boolean);
+
+  return new Set(
+    configuredEmails.length > 0
+      ? configuredEmails
+      : ["elsabalii007@gmail.com"],
+  );
+};
 
 const serializeUser = (user) => ({
   id: user._id,
@@ -61,14 +73,12 @@ const normalizeEnumValue = (value, aliases) => {
   return aliases.get(String(value).toLowerCase().trim()) || null;
 };
 
-const getHardcodedRoleForEmail = (email) =>
-  HARDCODED_ROLE_BY_EMAIL.get(String(email || "").toLowerCase().trim()) || null;
+const isBootstrapAdminEmail = (email) =>
+  getBootstrapAdminEmails().has(String(email || "").toLowerCase().trim());
 
-const resolveAllowedRoleForEmail = (email, requestedRole) => {
-  const hardcodedRole = getHardcodedRoleForEmail(email);
-
-  if (hardcodedRole) {
-    return { role: hardcodedRole };
+const resolveSignupRoleForEmail = (email, requestedRole) => {
+  if (isBootstrapAdminEmail(email)) {
+    return { role: "admin" };
   }
 
   if (requestedRole && PRIVILEGED_ROLES.has(requestedRole)) {
@@ -78,28 +88,21 @@ const resolveAllowedRoleForEmail = (email, requestedRole) => {
   }
 
   return {
-    role: requestedRole || "customer",
+    role: "customer",
   };
 };
 
-const syncRestrictedRoleForUser = async (user) => {
-  const hardcodedRole = getHardcodedRoleForEmail(user.email);
-
-  if (hardcodedRole) {
-    if (user.role !== hardcodedRole) {
-      user.role = hardcodedRole;
-      await user.save();
-    }
-
-    return hardcodedRole;
+const syncBootstrapAdminRoleForUser = async (user) => {
+  if (!isBootstrapAdminEmail(user.email)) {
+    return user.role;
   }
 
-  if (PRIVILEGED_ROLES.has(user.role)) {
-    user.role = "customer";
+  if (user.role !== "admin") {
+    user.role = "admin";
     await user.save();
   }
 
-  return user.role;
+  return "admin";
 };
 
 const getSessionPolicyLabel = (role, rememberMe) => {
@@ -221,7 +224,7 @@ export const signup = async (req, res) => {
       return res.status(400).json({ message: "Invalid customer type." });
     }
 
-    const allowedRole = resolveAllowedRoleForEmail(normalizedEmail, normalizedRole);
+    const allowedRole = resolveSignupRoleForEmail(normalizedEmail, normalizedRole);
 
     if (allowedRole.errorMessage) {
       return res.status(403).json({ message: allowedRole.errorMessage });
@@ -241,6 +244,23 @@ export const signup = async (req, res) => {
       role: allowedRole.role,
       customerType: normalizedCustomerType,
     });
+
+    await createNotificationForUser(user._id, {
+      message:
+        user.role === "admin"
+          ? "Your Washa admin account is ready."
+          : "Your Washa account has been created. You can now place and track laundry orders.",
+      title: user.role === "admin" ? "Admin account created" : "Account created",
+      type: "account-created",
+    });
+
+    if (user.role === "customer") {
+      await createNotificationsForRoles(["admin"], {
+        message: `${user.name} created a customer account.`,
+        title: "New customer account",
+        type: "account-created",
+      });
+    }
 
     const sessionPayload = await issueAuthSession(res, user, {
       rememberMe,
@@ -281,18 +301,13 @@ export const login = async (req, res) => {
       return res.status(400).json({ message: "Invalid account role." });
     }
 
-    const allowedRole = resolveAllowedRoleForEmail(normalizedEmail, requestedRole);
+    const effectiveUserRole = await syncBootstrapAdminRoleForUser(user);
+    const expectedRole = requestedRole || effectiveUserRole;
 
-    if (allowedRole.errorMessage) {
-      return res.status(403).json({ message: allowedRole.errorMessage });
-    }
-
-    const effectiveUserRole = await syncRestrictedRoleForUser(user);
-
-    if (effectiveUserRole !== allowedRole.role) {
+    if (effectiveUserRole !== expectedRole) {
       return res
         .status(403)
-        .json({ message: `This account is not registered as a ${allowedRole.role}.` });
+        .json({ message: `This account is not registered as a ${expectedRole}.` });
     }
 
     const sessionPayload = await issueAuthSession(res, user, {

@@ -4,6 +4,10 @@ import PickupScheduleConfig from "../models/PickupScheduleConfig.js";
 import StaffAttendance from "../models/StaffAttendance.js";
 import { saveImageDataUrl } from "../utils/imageStorage.js";
 import {
+  createNotificationForUser,
+  createNotificationsForRoles,
+} from "../utils/notifications.js";
+import {
   calculateTotalAmount,
   normalizeDate,
   normalizeItems,
@@ -87,6 +91,15 @@ const serializeCustomer = (customer) => {
   return { id: customer };
 };
 
+const serializeDeliveryState = (delivery = {}) => ({
+  deliveredAt: delivery.deliveredAt || null,
+  pickedUpAt: delivery.pickedUpAt || null,
+  sentAt: delivery.sentAt || null,
+  status: delivery.status || "awaiting-pickup",
+  updatedAt: delivery.updatedAt || null,
+  updatedBy: delivery.updatedBy || null,
+});
+
 const serializeOrder = (order) => ({
   id: order._id,
   orderNumber: order.orderNumber,
@@ -100,6 +113,7 @@ const serializeOrder = (order) => ({
   totalAmount: order.totalAmount,
   status: order.status,
   paymentStatus: order.paymentStatus,
+  delivery: serializeDeliveryState(order.delivery),
   pickupShare: {
     createdAt: order.pickupShare?.createdAt || null,
     hasActiveLink: Boolean(order.pickupShare?.token),
@@ -125,6 +139,7 @@ const serializeSharedPickupOrder = (order) => ({
   totalAmount: order.totalAmount,
   status: order.status,
   paymentStatus: order.paymentStatus,
+  delivery: serializeDeliveryState(order.delivery),
   createdAt: order.createdAt,
   updatedAt: order.updatedAt,
 });
@@ -139,6 +154,7 @@ const serializeStaffDashboardOrder = (order) => ({
   scheduledFor: order.scheduledFor,
   serviceType: order.serviceType,
   status: order.status,
+  delivery: serializeDeliveryState(order.delivery),
   totalAmount: order.totalAmount,
   updatedAt: order.updatedAt,
   createdAt: order.createdAt,
@@ -316,6 +332,148 @@ const findCustomerOrderById = async (customerId, orderId) =>
   }).populate("customer", "name email phone");
 
 const createPickupShareToken = () => crypto.randomBytes(18).toString("base64url");
+
+const notifyOrderCreated = async (order, customer) => {
+  await Promise.all([
+    createNotificationForUser(customer._id, {
+      message: `Your order #${order.orderNumber} has been placed. We'll notify you as it moves through pickup, verification, and delivery.`,
+      order: order._id,
+      title: "Order placed",
+      type: "order-created",
+    }),
+    createNotificationsForRoles(["admin", "staff"], {
+      message: `${customer.name || "A customer"} placed order #${order.orderNumber}.`,
+      order: order._id,
+      title: "New order placed",
+      type: "order-created",
+    }),
+  ]);
+};
+
+const notifyVerificationCompleted = async (order, staffUser) => {
+  await Promise.all([
+    createNotificationForUser(order.customer?._id || order.customer, {
+      actor: staffUser?._id,
+      message: `Items for order #${order.orderNumber} have been verified by the Washa team.`,
+      order: order._id,
+      title: "Items verified",
+      type: "item-verified",
+    }),
+    createNotificationsForRoles(
+      ["admin"],
+      {
+        actor: staffUser?._id,
+        message: `Verification is complete for order #${order.orderNumber}.`,
+        order: order._id,
+        title: "Order verification complete",
+        type: "item-verified",
+      },
+      {
+        excludeUserIds: [staffUser?._id],
+      },
+    ),
+  ]);
+};
+
+const notifyDeliveryPickedUp = async (order, staffUser) => {
+  await Promise.all([
+    createNotificationForUser(order.customer?._id || order.customer, {
+      actor: staffUser?._id,
+      message: `Order #${order.orderNumber} has been picked up and is now with the Washa team.`,
+      order: order._id,
+      title: "Items picked up",
+      type: "delivery-picked-up",
+    }),
+    createNotificationsForRoles(
+      ["admin"],
+      {
+        actor: staffUser?._id,
+        message: `Order #${order.orderNumber} was marked picked up.`,
+        order: order._id,
+        title: "Order picked up",
+        type: "delivery-picked-up",
+      },
+      {
+        excludeUserIds: [staffUser?._id],
+      },
+    ),
+  ]);
+};
+
+const notifyDeliverySent = async (order, staffUser) => {
+  await Promise.all([
+    createNotificationForUser(order.customer?._id || order.customer, {
+      actor: staffUser?._id,
+      message: `Order #${order.orderNumber} has been sent out for delivery.`,
+      order: order._id,
+      title: "Items sent",
+      type: "delivery-sent",
+    }),
+    createNotificationsForRoles(
+      ["admin"],
+      {
+        actor: staffUser?._id,
+        message: `Order #${order.orderNumber} was sent out for delivery.`,
+        order: order._id,
+        title: "Order sent",
+        type: "delivery-sent",
+      },
+      {
+        excludeUserIds: [staffUser?._id],
+      },
+    ),
+  ]);
+};
+
+const notifyDeliveryDelivered = async (order, staffUser) => {
+  await Promise.all([
+    createNotificationForUser(order.customer?._id || order.customer, {
+      actor: staffUser?._id,
+      message: `Order #${order.orderNumber} has been delivered.`,
+      order: order._id,
+      title: "Items delivered",
+      type: "delivery-delivered",
+    }),
+    createNotificationsForRoles(
+      ["admin"],
+      {
+        actor: staffUser?._id,
+        message: `Order #${order.orderNumber} was marked delivered.`,
+        order: order._id,
+        title: "Order delivered",
+        type: "delivery-delivered",
+      },
+      {
+        excludeUserIds: [staffUser?._id],
+      },
+    ),
+  ]);
+};
+
+const notifyLaundryStage = async (order, staffUser, stageLabel) => {
+  await Promise.all([
+    createNotificationForUser(order.customer?._id || order.customer, {
+      actor: staffUser?._id,
+      message: `Order #${order.orderNumber} is now ${stageLabel.toLowerCase()}.`,
+      order: order._id,
+      title: `Laundry update: ${stageLabel}`,
+      type: "laundry-stage",
+    }),
+    createNotificationsForRoles(
+      ["admin"],
+      {
+        actor: staffUser?._id,
+        message: `Order #${order.orderNumber} moved to ${stageLabel}.`,
+        order: order._id,
+        title: `Laundry stage: ${stageLabel}`,
+        type: "laundry-stage",
+      },
+      {
+        excludeUserIds: [staffUser?._id],
+      },
+    ),
+  ]);
+};
 
 const getStaffOrderQuery = (orderId) => {
   const normalizedOrderId = normalizeText(orderId);
@@ -622,6 +780,37 @@ const getPickupScheduleBadge = (status) => {
   }
 };
 
+const getDeliveryStatusLabel = (deliveryStatus) => {
+  switch (deliveryStatus) {
+    case "picked-up":
+      return "Picked Up";
+    case "processing":
+      return "Processing";
+    case "ready-for-delivery":
+      return "Ready for Delivery";
+    case "out-for-delivery":
+      return "Sent";
+    case "delivered":
+      return "Delivered";
+    case "awaiting-pickup":
+    default:
+      return "";
+  }
+};
+
+const getDeliveryStatusClassName = (deliveryStatus) => {
+  switch (deliveryStatus) {
+    case "picked-up":
+      return "bg-[#dce8f6] text-[var(--color-primary)]";
+    case "out-for-delivery":
+      return "bg-[var(--color-warm-soft)] text-[var(--color-primary)]";
+    case "delivered":
+      return "bg-[#ecfdf5] text-[#047857]";
+    default:
+      return "";
+  }
+};
+
 const getPickupSectionStatusPresentation = (
   orders,
   sectionDefinition,
@@ -706,6 +895,9 @@ const buildStaffDashboardPayload = (orders, staffUser) => {
     .forEach((order) => {
       const label = getPickupSectionLabel(order.scheduledFor);
       const statusPresentation = getPickupStatusPresentation(order.status);
+      const deliveryStatus = order.delivery?.status || "awaiting-pickup";
+      const deliveryLabel = getDeliveryStatusLabel(deliveryStatus);
+      const deliveryClassName = getDeliveryStatusClassName(deliveryStatus);
       const entry = pickupSectionsMap.get(label) || [];
 
       const isOverdue =
@@ -720,9 +912,10 @@ const buildStaffDashboardPayload = (orders, staffUser) => {
         isActionActive: statusPresentation.isActionActive,
         isOverdue,
         items: order.itemCount,
-        status: statusPresentation.label,
-        statusClassName: getPickupStatusClassName(order.status),
+        status: deliveryLabel || statusPresentation.label,
+        statusClassName: deliveryClassName || getPickupStatusClassName(order.status),
         statusKey: order.status,
+        deliveryStatus,
         time: formatDateTime(order.scheduledFor, {
           hour: "numeric",
           minute: "2-digit",
@@ -1076,6 +1269,56 @@ const applyVerificationPayload = async (order, body, staffUser) => {
   return null;
 };
 
+const applyDeliveryTransition = (order, nextDeliveryStatus, staffUser) => {
+  const now = new Date();
+  const existingDelivery = serializeDeliveryState(order.delivery);
+  const delivery = {
+    ...existingDelivery,
+    status: nextDeliveryStatus,
+    updatedAt: now,
+    updatedBy: staffUser?._id || null,
+  };
+
+  if (nextDeliveryStatus === "picked-up") {
+    delivery.pickedUpAt = existingDelivery.pickedUpAt || now;
+
+    if (order.status === "pending" || order.status === "confirmed") {
+      order.status = "in-progress";
+    }
+  }
+
+  if (nextDeliveryStatus === "processing") {
+    if (order.status !== "cancelled") {
+      order.status = "in-progress";
+    }
+  }
+
+  if (nextDeliveryStatus === "ready-for-delivery") {
+    if (order.status !== "cancelled") {
+      order.status = "completed";
+    }
+  }
+
+  if (nextDeliveryStatus === "out-for-delivery") {
+    delivery.sentAt = existingDelivery.sentAt || now;
+
+    if (order.status !== "cancelled") {
+      order.status = "completed";
+    }
+  }
+
+  if (nextDeliveryStatus === "delivered") {
+    delivery.deliveredAt = existingDelivery.deliveredAt || now;
+
+    if (order.status !== "cancelled") {
+      order.status = "completed";
+    }
+  }
+
+  order.delivery = delivery;
+  order.markModified("delivery");
+};
+
 export const getStaffVerificationOrder = async (req, res) => {
   try {
     if (!requireStaffRole(req, res)) {
@@ -1124,6 +1367,10 @@ export const updateStaffVerificationOrder = async (req, res) => {
 
     await order.save();
 
+    if (req.body?.completeVerification && order.verification?.notifyCustomer !== false) {
+      await notifyVerificationCompleted(order, req.user);
+    }
+
     return res.status(200).json({
       message: req.body?.completeVerification
         ? "Verification completed successfully."
@@ -1133,6 +1380,89 @@ export const updateStaffVerificationOrder = async (req, res) => {
   } catch (error) {
     return res.status(500).json({
       message: error.message || "Unable to update verification progress.",
+    });
+  }
+};
+
+export const updateStaffDeliveryStatus = async (req, res) => {
+  try {
+    if (!requireStaffRole(req, res)) {
+      return undefined;
+    }
+
+    const order = await findStaffOrder(req.params.orderId);
+
+    if (!order) {
+      return res.status(404).json({ message: "Order not found." });
+    }
+
+    if (order.status === "cancelled") {
+      return res.status(400).json({
+        message: "Cancelled orders cannot be updated for delivery.",
+      });
+    }
+
+    const normalizedAction = normalizeText(req.body?.action || req.body?.status)
+      .toLowerCase()
+      .replace(/_/g, "-");
+    const actionToDeliveryStatus = new Map([
+      ["picked-up", "picked-up"],
+      ["pickup", "picked-up"],
+      ["mark-picked-up", "picked-up"],
+      ["processing", "processing"],
+      ["in-progress", "processing"],
+      ["washing", "processing"],
+      ["drying", "processing"],
+      ["ironing", "processing"],
+      ["ready", "ready-for-delivery"],
+      ["ready-for-delivery", "ready-for-delivery"],
+      ["sent", "out-for-delivery"],
+      ["out-for-delivery", "out-for-delivery"],
+      ["delivered", "delivered"],
+    ]);
+    const nextDeliveryStatus = actionToDeliveryStatus.get(normalizedAction);
+
+    if (!nextDeliveryStatus) {
+      return res.status(400).json({
+        message:
+          "Delivery action must be picked-up, processing, ready-for-delivery, sent, out-for-delivery, or delivered.",
+      });
+    }
+
+    const previousDeliveryStatus = serializeDeliveryState(order.delivery).status;
+    applyDeliveryTransition(order, nextDeliveryStatus, req.user);
+    await order.save();
+
+    if (previousDeliveryStatus !== nextDeliveryStatus) {
+      if (nextDeliveryStatus === "picked-up") {
+        await notifyDeliveryPickedUp(order, req.user);
+      }
+
+      if (nextDeliveryStatus === "processing") {
+        await notifyLaundryStage(order, req.user, "Processing");
+      }
+
+      if (nextDeliveryStatus === "ready-for-delivery") {
+        await notifyLaundryStage(order, req.user, "Ready for delivery");
+      }
+
+      if (nextDeliveryStatus === "out-for-delivery") {
+        await notifyDeliverySent(order, req.user);
+      }
+
+      if (nextDeliveryStatus === "delivered") {
+        await notifyDeliveryDelivered(order, req.user);
+      }
+    }
+
+    return res.status(200).json({
+      delivery: serializeDeliveryState(order.delivery),
+      message: `Order marked ${getDeliveryStatusLabel(nextDeliveryStatus).toLowerCase()}.`,
+      order: serializeOrder(order),
+    });
+  } catch (error) {
+    return res.status(500).json({
+      message: error.message || "Unable to update delivery status.",
     });
   }
 };
@@ -1153,6 +1483,7 @@ export const createOrder = async (req, res) => {
     }
 
     await order.save();
+    await notifyOrderCreated(order, req.user);
 
     return res.status(201).json({
       message: "Order created successfully.",
@@ -1530,13 +1861,19 @@ export const getStaffPickupSchedule = async (req, res) => {
         .filter((order) => getPickupSectionDefinition(order.scheduledFor).id === sectionDefinition.id)
         .map((order) => {
           const pickupBadge = getPickupScheduleBadge(order.status);
+          const deliveryStatus = order.delivery?.status || "awaiting-pickup";
+          const deliveryLabel = getDeliveryStatusLabel(deliveryStatus);
+          const deliveryClassName = getDeliveryStatusClassName(deliveryStatus);
 
           return {
             buttonClassName: pickupBadge.buttonClassName,
             contactEmail: order.customer?.email || "",
             contactPhone: order.customer?.phone || "",
             customer: order.customer?.name || "Customer",
+            deliveryStatus,
             id: order.orderNumber,
+            isPickedUp: Boolean(order.delivery?.pickedUpAt),
+            isSent: Boolean(order.delivery?.sentAt),
             itemBadgeClassName: "bg-[var(--color-primary-soft)] text-[var(--color-primary)]",
             items: order.itemCount,
             readyText:
@@ -1547,8 +1884,8 @@ export const getStaffPickupSchedule = async (req, res) => {
               hour: "numeric",
               minute: "2-digit",
             })}`,
-            status: pickupBadge.label,
-            statusBadgeClassName: pickupBadge.statusBadgeClassName,
+            status: deliveryLabel || pickupBadge.label,
+            statusBadgeClassName: deliveryClassName || pickupBadge.statusBadgeClassName,
           };
         });
       const statusPresentation = getPickupSectionStatusPresentation(

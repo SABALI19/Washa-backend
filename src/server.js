@@ -4,6 +4,7 @@ import path from "path";
 import connectDB from "./dbconnections/dbConnection.js";
 import adminRouter from "./routes/adminRoutes.js";
 import authRouter from "./routes/authRoutes.js";
+import notificationRouter from "./routes/notificationRoutes.js";
 import ordersRouter from "./routes/orderRoutes.js";
 
 dotenv.config();
@@ -90,6 +91,7 @@ app.get("/api/health", (req, res) => {
 
 app.use("/api/auth", authRouter);
 app.use("/api/admin", adminRouter);
+app.use("/api/notifications", notificationRouter);
 app.use("/api/orders", ordersRouter);
 
 const startServer = async () => {
